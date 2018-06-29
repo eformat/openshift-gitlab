@@ -13,3 +13,8 @@ oc new-app -f ./gitlab.yml \
 ```
 
 
+### Work In Progress
+
+OpenIDConnect support (so you can login using keycloak for example)
+
+-- https://github.com/eformat/gitlab-ce-oidc
