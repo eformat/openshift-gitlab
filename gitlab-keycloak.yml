@@ -626,17 +626,17 @@ objects:
         'args' => {
           client_options: {
                 'site' => '${KEYCLOAK_URL}', # including port if necessary
-                'user_info_url' => '${KEYCLOAK_URL}/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/userinfo',
-                'authorize_url' => '${KEYCLOAK_URL}/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/auth',
-                'token_url' => '${KEYCLOAK_URL}/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token',
+                'user_info_url' => '/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/userinfo',
+                'authorize_url' => '/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/auth',
+                'token_url' => '/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token',
           },
           user_response_structure: {
             #root_path: ['user'], # i.e. if attributes are returned in JsonAPI format (in a 'user' node nested under a 'data' node)
             attributes: { email:'email', first_name:'given_name', last_name:'family_name', name:'name', nickname:'preferred_username' }, # if the nickname attribute of a user is called 'username'
             id_path: 'preferred_username'
           },
-          name: 'OpenShift', # DisplayName
-          strategy_class: "OmniAuth::Strategies::OAuth2Generic"
+          #name: 'OpenShift', # DisplayName
+          #strategy_class: "OmniAuth::Strategies::OAuth2Generic"
         }
       }]
 - apiVersion: v1
