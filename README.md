@@ -4,10 +4,13 @@ No LDAP:
 
 ```
 oc new-project gitlab --display-name='Gitlab' --description='Gitlab'
+
+#oc adm policy add-scc-to-user anyuid -z default -n gitlab
 oc adm policy add-scc-to-user anyuid -z gitlab-ce-user -n gitlab
+oc adm policy add-scc-to-user privileged -z gitlab-ce-runner-user -n gitlab
 
 oc new-app -f ./gitlab.yml \
-  -p APPLICATION_HOSTNAME=gitlab.apps.bar.com \
+  -p APPLICATION_HOSTNAME=gitlab.apps.foo.sandbox1543.opentlc.com \
   -p ETC_VOL_SIZE=1Gi \
   -p GITLAB_DATA_VOL_SIZE=1Gi \
   -p POSTGRESQL_VOL_SIZE=1Gi \

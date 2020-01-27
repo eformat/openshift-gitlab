@@ -1,4 +1,4 @@
-apiVersion: v1
+apiVersion: template.openshift.io/v1
 kind: Template
 labels:
   createdBy: gitlab-ce-template
@@ -10,7 +10,6 @@ metadata:
       is: <application name>-user"
     iconClass: icon-gitlab
     tags: instant-app,gitlab,VCS,ci-cd
-  creationTimestamp: null
   name: gitlab-ce
 objects:
 - apiVersion: v1
@@ -23,8 +22,20 @@ objects:
     tags:
     - from:
         kind: DockerImage
-        name: gitlab/gitlab-ce:10.2.3-ce.0
-      name: gitlab-10.2.3
+        name: gitlab/gitlab-ce:12.4.8-ce.0
+      name: gitlab-12.4.8
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-runner
+  spec:
+    tags:
+    - from:
+        kind: DockerImage
+        name: gitlab/gitlab-runner:v12.7.0
+      name: gitlab-runner-v12.7.0
 - apiVersion: v1
   kind: ImageStream
   metadata:
@@ -42,6 +53,10 @@ objects:
   metadata:
     name: ${APPLICATION_NAME}-user
 - apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: ${APPLICATION_NAME}-runner-user
+- apiVersion: v1
   kind: DeploymentConfig
   metadata:
     labels:
@@ -53,17 +68,7 @@ objects:
       app: ${APPLICATION_NAME}
       deploymentconfig: ${APPLICATION_NAME}
     strategy:
-      recreateParams:
-        pre:
-          failurePolicy: Retry
-          execNewPod:
-            containerName: gitlab-ce
-            command:
-            - bash
-            - -c
-            - /opt/gitlab/embedded/bin/openssl req -newkey rsa:2048 -nodes -keyout /etc/gitlab/${APPLICATION_HOSTNAME}.key -x509 -days 365 -out /etc/gitlab/${APPLICATION_HOSTNAME}.crt -subj "/C=GB/ST=London/L=London/O=Container and PaaS CoP/CN=${APPLICATION_HOSTNAME}"
-            volumes:
-            - gitlab-ce-volume-1
+      recreateParams: {}
       resources: {}
       type: Recreate
     template:
@@ -75,61 +80,42 @@ objects:
         containers:
         - env:
           - name: GITLAB_OMNIBUS_CONFIG
-            value:
-              external_url "https://${APPLICATION_HOSTNAME}/";
-              nginx['ssl_certificate']="/etc/gitlab/${APPLICATION_HOSTNAME}.crt";
-              nginx['ssl_certificate_key']="/etc/gitlab/${APPLICATION_HOSTNAME}.key";
-              gitlab_rails['gitlab_https']=true;
-              gitlab_rails['gitlab_port']=443;
-              root_pass='${GITLAB_ROOT_PASSWORD}';
-              gitlab_rails['initial_root_password']=root_pass unless root_pass.to_s == '';
-              postgresql['enable']=false; gitlab_rails['db_host'] = '${APPLICATION_NAME}-postgresql';
-              gitlab_rails['db_password']='${POSTGRESQL_PASSWORD}';
-              gitlab_rails['db_username']='${POSTGRESQL_USER}';
-              gitlab_rails['db_database']='${POSTGRESQL_DATABASE}';
-              redis['enable'] = false;
-              gitlab_rails['redis_host']='${APPLICATION_NAME}-redis';
-              unicorn['worker_processes'] = ${UNICORN_WORKERS};
-              manage_accounts['enable'] = true;
-              manage_storage_directories['manage_etc'] = false;
-              gitlab_shell['auth_file'] = '/gitlab-data/ssh/authorized_keys';
-              git_data_dirs({ 'default' => { 'path' => '/gitlab-data/git-data' } });
-              gitlab_rails['shared_path'] = '/gitlab-data/shared';
-              gitlab_rails['uploads_directory'] = '/gitlab-data/uploads';
-              gitlab_ci['builds_directory'] = '/gitlab-data/builds';
-              prometheus_monitoring['enable'] = false;
+            valueFrom:
+              configMapKeyRef:
+                key: gitlab.rb
+                name: gitlab-config
           image: gitlab-ce
           imagePullPolicy: IfNotPresent
           livenessProbe:
+            failureThreshold: 3
             httpGet:
-              path: "/help"
-              port: 443
-              scheme: HTTPS
-            initialDelaySeconds: 120
-            timeoutSeconds: 1
+              path: /-/liveness
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 180
             periodSeconds: 10
             successThreshold: 1
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: "/help"
-              port: 443
-              scheme: HTTPS
-            initialDelaySeconds: 20
             timeoutSeconds: 1
-            periodSeconds: 10
-            successThreshold: 1
-            failureThreshold: 3
           name: gitlab-ce
           ports:
           - containerPort: 22
             protocol: TCP
-          - containerPort: 443
+          - containerPort: 80
             protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /-/readiness
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
           resources:
             limits:
-              cpu: "1"
-              memory: 2Gi
+              cpu: ${GITLAB_MAX_CPU}
+              memory: ${GITLAB_MAX_MEMORY}
             requests:
               cpu: 500m
               memory: 1Gi
@@ -139,6 +125,10 @@ objects:
             name: gitlab-ce-volume-1
           - mountPath: /gitlab-data
             name: gitlab-ce-volume-2
+          - mountPath: /var/opt/gitlab/gitlab-rails/shared/artifacts
+            name: gitlab-ce-volume-3
+          - mountPath: /var/opt/gitlab/gitlab-rails/shared/pages
+            name: gitlab-ce-volume-4
         dnsPolicy: ClusterFirst
         restartPolicy: Always
         serviceAccount: ${APPLICATION_NAME}-user
@@ -150,6 +140,12 @@ objects:
         - name: gitlab-ce-volume-2
           persistentVolumeClaim:
             claimName: ${APPLICATION_NAME}-data
+        - name: gitlab-ce-volume-3
+          persistentVolumeClaim:
+            claimName: ${APPLICATION_NAME}-artifacts
+        - name: gitlab-ce-volume-4
+          persistentVolumeClaim:
+            claimName: ${APPLICATION_NAME}-pages
     test: false
     triggers:
     - type: ConfigChange
@@ -159,7 +155,95 @@ objects:
         - gitlab-ce
         from:
           kind: ImageStreamTag
-          name: ${APPLICATION_NAME}:gitlab-10.2.3
+          name: ${APPLICATION_NAME}:gitlab-12.4.8
+      type: ImageChange
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-runner
+  spec:
+    replicas: 1
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}-runner
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: ${APPLICATION_NAME}
+          deploymentconfig: ${APPLICATION_NAME}-runner
+      spec:
+        containers:
+        - command:
+          - /bin/bash
+          - /scripts/entrypoint
+          env:
+          - name: REGISTRATION_TOKEN
+            value: ${GITLAB_RUNNER_TOKEN}
+          - name: REGISTER_LOCKED
+            value: "false"
+          - name: KUBERNETES_PRIVILEGED
+            value: "true"
+          - name: KUBERNETES_IMAGE
+            value: ubuntu:16.04
+          - name: KUBERNETES_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          image: gitlab-runner
+          imagePullPolicy: IfNotPresent
+          name: gitlab-runner
+          resources: {}
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /etc/gitlab-runner
+            name: gitlab-runner-1
+          - mountPath: /home/gitlab-runner
+            name: gitlab-runner-2
+          - mountPath: /scripts
+            name: scripts
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: ${APPLICATION_NAME}-runner-user
+        serviceAccountName: ${APPLICATION_NAME}-runner-user
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - emptyDir: {}
+          name: gitlab-runner-1
+        - emptyDir: {}
+          name: gitlab-runner-2
+        - configMap:
+            defaultMode: 420
+            name: gitlab-runner
+          name: scripts
+    test: false
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - gitlab-runner
+        from:
+          kind: ImageStreamTag
+          name: ${APPLICATION_NAME}-runner:gitlab-runner-v12.7.0
       type: ImageChange
 - apiVersion: v1
   kind: DeploymentConfig
@@ -224,6 +308,20 @@ objects:
           name: ${APPLICATION_NAME}-redis:3.2.3
       type: ImageChange
 - apiVersion: v1
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-database_name: '{.data[''database-name'']}'
+      template.openshift.io/expose-password: '{.data[''database-password'']}'
+      template.openshift.io/expose-username: '{.data[''database-user'']}'
+      template.openshift.io/expose-admin-password: '{.data[''database-admin-password'']}'
+    name: ${APPLICATION_NAME}-postgresql
+  stringData:
+    database-name: ${POSTGRESQL_DATABASE}
+    database-password: ${POSTGRESQL_PASSWORD}
+    database-user: ${POSTGRESQL_USER}
+    database-admin-password: ${POSTGRESQL_ADMIN_PASSWORD}
+- apiVersion: v1
   kind: DeploymentConfig
   metadata:
     labels:
@@ -235,16 +333,17 @@ objects:
       app: ${APPLICATION_NAME}
       deploymentconfig: ${APPLICATION_NAME}-postgresql
     strategy:
+      type: Recreate      
       recreateParams:
         post:
           execNewPod:
             command:
             - /usr/bin/scl
             - enable
-            - rh-postgresql94
+            - rh-postgresql96
             - export PGPASSWORD='${POSTGRESQL_ADMIN_PASSWORD}'; psql -h '${APPLICATION_NAME}-postgresql'
               -U postgres -d ${POSTGRESQL_DATABASE} -c 'CREATE EXTENSION IF NOT EXISTS
-              pg_trgm;'
+              pg_trgm;'            
             containerName: gitlab-ce-postgresql
             env:
             - name: HOME
@@ -252,33 +351,46 @@ objects:
             - name: PGDATA
               value: /var/lib/pgsql/data/userdata
             - name: CONTAINER_SCRIPTS_PATH
-              value: /usr/share/container-scripts/postgresql
+              value: /usr/share/container-scripts/postgresql            
           failurePolicy: Abort
-      resources: {}
-      type: Recreate
+      resources: {}      
     template:
       metadata:
         labels:
           app: ${APPLICATION_NAME}
           deploymentconfig: ${APPLICATION_NAME}-postgresql
       spec:
-        containers:
+        containers:        
         - env:
-          - name: POSTGRESQL_USER
-            value: ${POSTGRESQL_USER}
-          - name: POSTGRESQL_PASSWORD
-            value: ${POSTGRESQL_PASSWORD}
-          - name: POSTGRESQL_DATABASE
-            value: ${POSTGRESQL_DATABASE}
           - name: POSTGRESQL_ADMIN_PASSWORD
-            value: ${POSTGRESQL_ADMIN_PASSWORD}
+            valueFrom:
+              secretKeyRef:
+                key: database-admin-password
+                name: ${APPLICATION_NAME}-postgresql        
+          - name: POSTGRESQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${APPLICATION_NAME}-postgresql
+          - name: POSTGRESQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${APPLICATION_NAME}-postgresql
+          - name: POSTGRESQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database-name
+                name: ${APPLICATION_NAME}-postgresql
           image: gitlab-ce-postgresql
           imagePullPolicy: IfNotPresent
           livenessProbe:
-            initialDelaySeconds: 30
-            tcpSocket:
-              port: 5432
-            timeoutSeconds: 1
+            exec:
+              command:
+              - /usr/libexec/check-container
+              - --live
+            initialDelaySeconds: 120
+            timeoutSeconds: 10
           name: gitlab-ce-postgresql
           ports:
           - containerPort: 5432
@@ -286,11 +398,7 @@ objects:
           readinessProbe:
             exec:
               command:
-              - /bin/sh
-              - -i
-              - -c
-              - psql -h 127.0.0.1 -U $POSTGRESQL_USER -q -d $POSTGRESQL_DATABASE -c
-                'SELECT 1'
+              - /usr/libexec/check-container
             initialDelaySeconds: 5
             timeoutSeconds: 1
           resources:
@@ -300,6 +408,9 @@ objects:
             requests:
               cpu: "1"
               memory: 512Mi
+          securityContext:
+            capabilities: {}
+            privileged: false              
           terminationMessagePath: /dev/termination-log
           volumeMounts:
           - mountPath: /var/lib/pgsql/data
@@ -320,30 +431,30 @@ objects:
         - gitlab-ce-postgresql
         from:
           kind: ImageStreamTag
-          name: postgresql:9.4
+          name: postgresql:9.6
           namespace: openshift
       type: ImageChange
-- kind: Service
-  apiVersion: v1
+- apiVersion: v1
+  kind: Service
   metadata:
-    name: "${APPLICATION_NAME}"
     labels:
-      app: "${APPLICATION_NAME}"
+      app: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}
   spec:
     ports:
     - name: 22-ssh
-      protocol: TCP
       port: 22
-      targetPort: 22
-    - name: 443-https
       protocol: TCP
-      port: 443
-      targetPort: 443
+      targetPort: 22
+    - name: 80-http
+      port: 80
+      protocol: TCP
+      targetPort: 80
     selector:
-      app: "${APPLICATION_NAME}"
-      deploymentconfig: "${APPLICATION_NAME}"
-    type: ClusterIP
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}
     sessionAffinity: None
+    type: ClusterIP
 - apiVersion: v1
   kind: Service
   metadata:
@@ -366,18 +477,23 @@ objects:
   metadata:
     labels:
       app: ${APPLICATION_NAME}
+    annotations:
+      template.openshift.io/expose-uri: postgres://{.spec.clusterIP}:{.spec.ports[?(.name=="postgresql")].port}
     name: ${APPLICATION_NAME}-postgresql
   spec:
     ports:
-    - name: 5432-postgresql
+    - name: postgresql
+      nodePort: 0
       port: 5432
       protocol: TCP
       targetPort: 5432
     selector:
       app: ${APPLICATION_NAME}
-      deploymentconfig: ${APPLICATION_NAME}-postgresql
+      deploymentconfig: ${APPLICATION_NAME}-postgresql    
     sessionAffinity: None
     type: ClusterIP
+  status:
+    loadBalancer: {}    
 - apiVersion: v1
   kind: PersistentVolumeClaim
   metadata:
@@ -411,6 +527,26 @@ objects:
 - apiVersion: v1
   kind: PersistentVolumeClaim
   metadata:
+    name: ${APPLICATION_NAME}-artifacts
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${GITLAB_ARTIFACTS_VOL_SIZE}
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: ${APPLICATION_NAME}-pages
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${GITLAB_PAGES_VOL_SIZE}
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
     name: ${APPLICATION_NAME}-postgresql
   spec:
     accessModes:
@@ -427,13 +563,62 @@ objects:
   spec:
     host: ${APPLICATION_HOSTNAME}
     port:
-      targetPort: 443-https
+      targetPort: 80-http
     to:
       kind: Service
       name: ${APPLICATION_NAME}
-    tls:
-      termination: passthrough
-    wildcardPolicy: None
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: gitlab-config
+  data:
+    gitlab.rb: |
+      external_url "http://${APPLICATION_HOSTNAME}/"
+      postgresql['enable']=false
+      gitlab_rails['db_host'] = '${APPLICATION_NAME}-postgresql'
+      gitlab_rails['db_password']='${POSTGRESQL_PASSWORD}'
+      gitlab_rails['db_username']='${POSTGRESQL_USER}'
+      gitlab_rails['db_database']='${POSTGRESQL_DATABASE}'
+      redis['enable'] = false
+      gitlab_rails['redis_host']='${APPLICATION_NAME}-redis'
+      unicorn['worker_processes'] = ${UNICORN_WORKERS}
+      manage_accounts['enable'] = true
+      manage_storage_directories['manage_etc'] = false
+      gitlab_shell['auth_file'] = '/gitlab-data/ssh/authorized_keys'
+      git_data_dirs({ 'default' => { 'path' => '/gitlab-data/git-data' } })
+      gitlab_rails['shared_path'] = '/gitlab-data/shared'
+      gitlab_rails['uploads_directory'] = '/gitlab-data/uploads'
+      gitlab_ci['builds_directory'] = '/gitlab-data/builds'
+      prometheus_monitoring['enable'] = false
+      gitlab_rails['usage_ping_enabled'] = false
+      gitlab_rails['initial_shared_runners_registration_token'] = "${GITLAB_RUNNER_TOKEN}"
+      gitlab_rails['monitoring_whitelist'] = ['0.0.0.0/0']
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: gitlab-runner
+  data:
+    entrypoint: |
+      #!/bin/bash
+      set -xe
+      cp /scripts/config.toml /etc/gitlab-runner/
+      # Register the runner
+      /entrypoint register --non-interactive \
+        --url http://${APPLICATION_NAME} \
+        --executor kubernetes
+      # Add docker.sock volumes
+      cat /scripts/volumes.toml >> /etc/gitlab-runner/config.toml
+      # Start the runner
+      /entrypoint run --user=gitlab-runner \
+        --working-directory=/home/gitlab-runner
+    volumes.toml: |2
+          [[runners.kubernetes.volumes.host_path]]
+            name = "docker-sock"
+            mount_path = "/var/run/docker.sock"
+            host_path = "/var/run/docker.sock"
+    config.toml: |
+      concurrent = 10
+      check_interval = 10
 parameters:
 - description: The name for the application. The service will be named like the application.
   displayName: Application name.
@@ -449,6 +634,17 @@ parameters:
     during first use.
   displayName: GitLab Root User Password
   name: GITLAB_ROOT_PASSWORD
+- description: The GitLab Runner Token
+  displayName: GitLab Runner Token
+  name: GITLAB_RUNNER_TOKEN
+  generate: expression
+  from: '[a-zA-Z0-9]{16}'
+  require: true
+- description: Replicas for GitLab Runner
+  displayName: GitLab Runner Replicas
+  value: "1"
+  required: true
+  name: GITLAB_RUNNER_REPLICAS
 - description: Username for PostgreSQL user that will be used for accessing the database.
   displayName: PostgreSQL User
   from: user[A-Z0-9]{3}
@@ -477,6 +673,16 @@ parameters:
   name: UNICORN_WORKERS
   required: true
   value: "2"
+- description: "Maximum memory allowed for GitLab pod"
+  displayName: GitLab Max Memory
+  name: GITLAB_MAX_MEMORY
+  value: "4Gi"
+  required: true
+- description: "Maximum CPU allowed for GitLab pod"
+  displayName: GitLab Max CPU
+  name: GITLAB_MAX_CPU
+  value: "1"
+  required: true
 - description: Volume size for /etc
   displayName: /etc/gitlab volume size
   name: ETC_VOL_SIZE
@@ -485,6 +691,14 @@ parameters:
   displayName: GitLab data volume size
   name: GITLAB_DATA_VOL_SIZE
   value: 5Gi
+- description: Volume size for GitLab artifacts
+  displayName: Artifacts volume size
+  name: GITLAB_ARTIFACTS_VOL_SIZE
+  value: 5Gi
+- description: Volume size for GitLab pages
+  displayName: Pages volume size
+  name: GITLAB_PAGES_VOL_SIZE
+  value: 1Gi
 - description: Volume size for postgresql data
   displayName: postgresql volume size
   name: POSTGRESQL_VOL_SIZE
