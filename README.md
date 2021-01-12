@@ -1,14 +1,14 @@
 # openshift-gitlab
 
-No LDAP:
-
+Project
 ```
 oc new-project gitlab --display-name='Gitlab' --description='Gitlab'
-
-#oc adm policy add-scc-to-user anyuid -z default -n gitlab
 oc adm policy add-scc-to-user anyuid -z gitlab-ce-user -n gitlab
 oc adm policy add-scc-to-user privileged -z gitlab-ce-runner-user -n gitlab
+```
 
+No LDAP
+```
 oc new-app -f ./gitlab.yml \
   -p APPLICATION_HOSTNAME=gitlab.apps.foo.sandbox1543.opentlc.com \
   -p ETC_VOL_SIZE=1Gi \
@@ -17,8 +17,7 @@ oc new-app -f ./gitlab.yml \
   -p REDIS_VOL_SIZE=1Gi
 ```
 
-For LDAP:
-
+LDAP
 ```
 oc new-app -f ./gitlab-ldap.yml \
   -p APPLICATION_HOSTNAME=gitlab.apps.dcp-apac-1.rht-labs.com \
@@ -38,8 +37,16 @@ oc new-app -f ./gitlab-ldap.yml \
   -p NAMESPACE=ci-cd
 ```
 
-### Work In Progress
-
-OpenIDConnect support (so you can login using keycloak for example)
-
--- https://github.com/eformat/gitlab-ce-oidc
+Keycloak
+```
+oc new-app -f ./gitlab-keycloak.yml \
+  -p APPLICATION_HOSTNAME=gitlab.apps.foo.sandbox1459.opentlc.com \
+  -p ETC_VOL_SIZE=1Gi \
+  -p GITLAB_DATA_VOL_SIZE=1Gi \
+  -p POSTGRESQL_VOL_SIZE=1Gi \
+  -p REDIS_VOL_SIZE=1Gi \
+  -p KEYCLOAK_CLIENT_SECRET=7d77085d-8912-4394-ae62-fc97ca743778 \
+  -p KEYCLOAK_URL=https://keycloak-keycloak.apps.foo.sandbox1459.opentlc.com \
+  -p KEYCLOAK_REALM=OpenShift \
+  -p KEYCLOAK_CLIENT_ID=gitlab
+```
