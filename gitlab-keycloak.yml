@@ -442,7 +442,7 @@ objects:
         - gitlab-ce-postgresql
         from:
           kind: ImageStreamTag
-          name: postgresql:9.6
+          name: postgresql:9.6-el8
           namespace: openshift
       type: ImageChange
 - kind: Service
@@ -617,7 +617,7 @@ objects:
       gitlab_rails['omniauth_enabled'] = true
       gitlab_rails['omniauth_block_auto_created_users'] = false
       gitlab_rails['omniauth_allow_single_sign_on'] = ['oauth2_generic']
-      gitlab_rails['omniauth_auto_sign_in_with_provider'] = 'oauth2_generic'
+      gitlab_rails['omniauth_auto_sign_in_with_provider'] = 'oauth2_generic'      
       gitlab_rails['omniauth_providers'] = [
       {
         'name' => 'oauth2_generic',
@@ -629,6 +629,7 @@ objects:
                 'user_info_url' => '/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/userinfo',
                 'authorize_url' => '/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/auth',
                 'token_url' => '/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token',
+                'end_session_endpoint' => '/auth/realms/${KEYCLOAK_REALM}/protocol/openid-connect/logout'
           },
           user_response_structure: {
             #root_path: ['user'], # i.e. if attributes are returned in JsonAPI format (in a 'user' node nested under a 'data' node)
